@@ -12,9 +12,6 @@ git clone --recursive https://github.com/flexflow/FlexFlow.git
 ```
 
 * Prior to building FlexFlow, you should define the path for libmetis.a and metis.h using FLEXFLOW_EXT_LIBRARIES and FLEXFLOW_INCLUDE_DIRS variables in the root CMakeLists.txt of FlexFlow.
-```
-git clone --recursive https://github.com/flexflow/FlexFlow.git
-```
 
 ## FlexFlow Python dependencies
 * The FlexFlow Python support requires several additional Python libraries, please check [this](https://github.com/flexflow/FlexFlow/blob/master/python/requirements.txt) for details. 
