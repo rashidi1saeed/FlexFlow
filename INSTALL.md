@@ -2,7 +2,16 @@
 FlexFlow can be built from source code using the following instructions.
 
 # 1. Download the source code
+* First Make sure you have built METIS library. The source code could be found here:
+```
+http://glaros.dtc.umn.edu/gkhome/metis/metis/download
+```
 * Clone the FlexFlow source code from the github.
+```
+git clone --recursive https://github.com/flexflow/FlexFlow.git
+```
+
+* Prior to building FlexFlow, you should define the path for libmetis.a and metis.h using FLEXFLOW_EXT_LIBRARIES and FLEXFLOW_INCLUDE_DIRS variables in the root CMakeLists.txt of FlexFlow.
 ```
 git clone --recursive https://github.com/flexflow/FlexFlow.git
 ```
