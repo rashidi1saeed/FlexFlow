@@ -44,6 +44,13 @@
 
 using namespace Legion;
 
+enum class CommOptimization{
+    None,
+    Random,
+    ClusterBased,
+    Hybrid
+};
+
 struct ParallelConfig {
   enum DeviceType {
     GPU = 0,
@@ -121,6 +128,11 @@ public:
                             ParallelConfig& config) const;
 public:
   int epochs, batchSize, printFreq;
+  //saeed
+  CommOptimization commOptimization;
+  int override_numNodes;
+  int override_workersPerNode;
+  //saeed end
   //int inputHeight, inputWidth;
   int numNodes, cpusPerNode, workersPerNode;
   float learningRate, weightDecay;

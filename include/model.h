@@ -24,6 +24,7 @@
 #include "loss_functions.h"
 #include "metrics_functions.h"
 #include "recompile.h"
+#include "comm_optimizer.h"
 #include <cuda_runtime.h>
 #include <curand.h>
 #include <unistd.h>
@@ -283,11 +284,14 @@ class Embedding;
 class FFModel {
 public:
   FFModel(FFConfig &config);
-
+  ~FFModel();
   static constexpr float PROPAGATION_CHANCE = 0.25;
   static constexpr float CONTINUE_PROPAGATION_CHANCE = 0.75;
   static constexpr float PROPAGATION_SIZE_WEIGHT = 1.0;
 
+  //Saeed
+  VirToPhyMapper::CommOptimizer *commOptimizer;
+  void printMapping(std::vector<uint32_t> &mapping);
   // C++ APIs for constructing models
   // Add an exp layer
   Tensor exp(const Tensor& x,
@@ -525,7 +529,16 @@ public:
                 std::map<Op*, ParallelConfig>& best,
                 size_t budget, float alpha,
                 CompMode comp_mode,
-                bool use_propagation) const;
+                bool use_propagation);
+  //saeed
+  void randomVirToPhyMap (uint32_t iterations,
+                            Simulator* simulator,
+                            std::map<Op*, ParallelConfig>& best,
+                            CompMode comp_mode);
+  inline void applyVirToPhyMapping (std::map<Op*, ParallelConfig>& virtual_mapping,
+                          std::map<Op*, ParallelConfig>& physical_mapping,
+                          std::vector<uint32_t> &mapping);
+  //saeed
   void propagate(std::map<Op *, ParallelConfig> const &current,
                  std::map<Op *, ParallelConfig> &next) const;
   void rewrite(const std::map<Op*, ParallelConfig>& current,

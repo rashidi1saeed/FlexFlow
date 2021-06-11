@@ -20,6 +20,7 @@
 #include <memory>
 #include <fstream>
 #include <unordered_map>
+#include "comm_optimizer.h"
 
 class Conv2DMeta;
 class LinearMeta;
@@ -107,6 +108,9 @@ public:
   virtual float get_inter_node_gpu_bandwidth() const = 0;
   virtual std::vector<CommDevice *> get_comm_path(MemDevice *src_mem, MemDevice *tar_mem) const = 0;
   virtual std::string to_string() const = 0;
+  //saeed
+  virtual void switch_to_inf_comm_perf()=0;
+  virtual void switch_to_orig_comm_perf()=0;
   int version;
 };
 
@@ -129,6 +133,15 @@ private:
   float inter_gpu_bandwidth;
   float inter_node_bandwidth;
   float gpu_dram_bandwidth;
+
+  //saeed
+  float bckp_inter_gpu_bandwidth;
+  float bckp_inter_node_bandwidth;
+  float bckp_gpu_dram_bandwidth;
+
+  void switch_to_inf_comm_perf();
+  void switch_to_orig_comm_perf();
+
   std::map<int, CompDevice*> id_to_gpu;
   std::map<int, MemDevice*> id_to_gpu_fb_mem;
   std::map<int, CommDevice*> id_to_gputodram_comm_device;
@@ -173,6 +186,8 @@ public:
     float get_inter_node_gpu_bandwidth() const;
     std::vector<CommDevice *> get_comm_path(MemDevice *src_mem, MemDevice *tar_mem) const;
     std::string to_string() const;
+    void switch_to_inf_comm_perf(){return;};
+    void switch_to_orig_comm_perf(){return;};
 private:
     int num_nodes;
     int num_sockets_per_node;
@@ -353,10 +368,14 @@ public:
   CostMetrics measure_operator_cost(Op* op, const ParallelConfig& config);
   float simulate_runtime(const FFModel* model,
       const std::map<Op*, ParallelConfig>& global,
-      CompMode comp_mode);
+      CompMode comp_mode,
+      VirToPhyMapper::CommOptimizer *commOptimizer,
+      bool printStats);
   float simulate_runtime(const FFModel* model,
       const std::map<Op*, ParallelConfig>& global,
       CompMode comp_mode,
+      VirToPhyMapper::CommOptimizer *commOptimizer,
+      bool printStats,
       std::string const &export_file_name);
   static void strategy_search_task(const Task *task,
                                    const std::vector<PhysicalRegion> &regions,

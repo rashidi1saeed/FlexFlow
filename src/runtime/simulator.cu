@@ -72,7 +72,7 @@ void Simulator::strategy_search_task(const Task *task,
                                      const std::vector<PhysicalRegion> &regions,
                                      Context ctx, Runtime *runtime)
 {
-  const FFModel* model = *((FFModel**) task->args);
+  FFModel* model = *((FFModel**) task->args);
   Memory gpu_mem = Machine::MemoryQuery(Machine::get_machine())
          .only_kind(Memory::GPU_FB_MEM).best_affinity_to(task->target_proc).first();
   // Realm::MemoryImpl* memImpl =
@@ -80,6 +80,10 @@ void Simulator::strategy_search_task(const Task *task,
   // Realm::Cuda::GPUFBMemory* memFBImpl = (Realm::Cuda::GPUFBMemory*) memImpl;
   // off_t offset = memFBImpl->alloc_bytes_local(model->config.simulator_work_space_size);
   // void* base_ptr = memFBImpl->get_direct_ptr(offset, 0);
+  //Saeed
+  model->config.workersPerNode=model->config.override_workersPerNode;
+  model->config.numNodes=model->config.override_numNodes;
+
   MachineModel *machine;
   if (model->config.machine_model_version == 0) {
     machine = (MachineModel *) new SimpleMachineModel(model->config.numNodes, model->config.workersPerNode, gpu_mem.capacity());

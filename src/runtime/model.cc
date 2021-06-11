@@ -785,6 +785,7 @@ FFModel::FFModel(FFConfig& _config)
   for (PointInRectIterator<2> it(task_rect); it(); it++) {
     handlers[idx++] = fm.get_result<FFHandler>(*it);
   }
+  commOptimizer=new VirToPhyMapper::CommOptimizer(config.override_workersPerNode*config.override_numNodes);
 }
 
 /*
@@ -1924,16 +1925,93 @@ void FFModel::rewrite(const std::map<Op*, ParallelConfig>& current,
     next[layers[opId]] = layers[opId]->get_random_parallel_config(*this);
   }
 }
+inline void FFModel::applyVirToPhyMapping(std::map<Op*, ParallelConfig> &virtual_mapping,
+                                   std::map<Op*, ParallelConfig> &physical_mapping,
+                                   std::vector<uint32_t> &mapping) {
+    std::map<Op*, ParallelConfig>::const_iterator it;
+    for (it = virtual_mapping.begin(); it != virtual_mapping.end(); it++) {
+        ParallelConfig &config = physical_mapping[it->first];
+        for (int j = 0; j < config.num_parts(); j++) {
+            config.device_ids[j]=mapping[(it->second).device_ids[j]];
+        }
+    }
+}
+void FFModel::randomVirToPhyMap(uint32_t iterations,
+                                Simulator* simulator,
+                                std::map<Op*, ParallelConfig>& best,
+                                CompMode comp_mode){
+    std::map<Op*, ParallelConfig> best_random;
+    std::cout<<"####FlexFlow Best answer map####"<<std::endl;
+    float flex_base_runtime = simulator->simulate_runtime(this, best, comp_mode,nullptr,false);
+    std::cout<<"The flexflow's best answer is: "<<flex_base_runtime<<std::endl;
+    std::cout<<"####Begnning The Random Map####"<<std::endl;
 
+    std::cout<<"####Pure compute time####"<<std::endl;
+    simulator->machine->switch_to_inf_comm_perf();
+    float pure_runtime = simulator->simulate_runtime(this, best, comp_mode,nullptr,false);
+    std::cout<<"The pure compute time is: "<<pure_runtime<<std::endl;
+    simulator->machine->switch_to_orig_comm_perf();
+
+    float random_runtime;
+    float best_random_runtime=1000000000;
+    uint64_t i;
+    std::map<Op*, ParallelConfig> newConfig=best;
+    for(i=0;i<iterations;i++){
+        std::vector<uint32_t> mapping=commOptimizer->mapRandom();
+        applyVirToPhyMapping(best,newConfig,mapping);
+        random_runtime = simulator->simulate_runtime(this, newConfig, comp_mode,nullptr,false);
+        std::cout<<"The runtime of random mapping iteration: "<<i<<" is: "<<random_runtime<<std::endl;
+        if(random_runtime<best_random_runtime){
+            best_random=newConfig;
+            best_random_runtime=random_runtime;
+        }
+        //best_random_runtime=std::min(random_runtime,best_random_runtime);
+    }
+    if(best_random_runtime<flex_base_runtime){
+        best=best_random;
+        std::cout<<"found a random mapping at the end that works better than baseline until iteration: "<<i<<" !, the runtime is: "<<best_random_runtime<<std::endl;
+    }
+    /*i--;
+    while(best_random_runtime>=flex_base_runtime){
+        std::vector<uint32_t> mapping=commOptimizer->mapRandom();
+        applyVirToPhyMapping(best,newConfig,mapping);
+        random_runtime = simulator->simulate_runtime(this, newConfig, comp_mode,nullptr,false);
+        best_random_runtime=std::min(random_runtime,best_random_runtime);
+        i++;
+    }*/
+}
+void FFModel::printMapping(std::vector <uint32_t> &mapping) {
+    std::cout<<"mapping: ";
+    for(auto &a:mapping){
+        std::cout<<a<<", ";
+    }
+    std::cout<<std::endl;
+}
+FFModel::~FFModel() {
+    if(commOptimizer != nullptr){
+        delete commOptimizer;
+    }
+}
 void FFModel::optimize(Simulator* simulator,
                        std::map<Op*, ParallelConfig>& best,
                        size_t budget, float alpha,
                        CompMode comp_mode,
-                       bool use_propagation) const
+                       bool use_propagation)
 {
+  //saeed start
+  int64_t initialCost,finalCost;
+  int prob;
+  float cluster_map_runtime;
+  float last_current=-1;
+  std::vector<uint32_t> hierarchy;
+  hierarchy.push_back(config.numNodes);
+  std::map<Op*, ParallelConfig> physical_mapping;
+  std::vector<uint32_t> mapping;
+  //saeed end
   // Start from data parallel
   std::map<Op*, ParallelConfig> current, next;
-  float best_runtime = simulator->simulate_runtime(this, best, comp_mode);
+  size_t current_last_changed=0;
+  float best_runtime = simulator->simulate_runtime(this, best, comp_mode, nullptr,false);
   current = best;
   float current_runtime = best_runtime;
   size_t reset_span = budget / 100, last_reset_iter = 0;
@@ -1949,7 +2027,34 @@ void FFModel::optimize(Simulator* simulator,
       last_reset_iter = iter;
     }
     rewrite(current, next, use_propagation);
-    float next_runtime = simulator->simulate_runtime(this, next, comp_mode);
+    float next_runtime=0;
+    next_runtime = simulator->simulate_runtime(this, next, comp_mode, nullptr,false);
+    /*else{
+        next_runtime = simulator->simulate_runtime(this, next, comp_mode, commOptimizer,false);
+        initialCost=commOptimizer->getInitialObjective(hierarchy);
+        if (iter % 1 == 0 && commOptimizer->commGraphEdges>0 && initialCost>0) {
+            physical_mapping=next;
+            std::vector<uint32_t> mapping=commOptimizer->mapByClustering(hierarchy,finalCost);
+            if(iter%100==0){
+                printMapping(mapping);
+            }
+            applyVirToPhyMapping(next,physical_mapping,mapping);
+            float cluster_map_runtime=simulator->simulate_runtime(this, physical_mapping, comp_mode, nullptr,false);
+            if(iter%1==0){
+                std::cout<<"clustering and sim end, iter: "<<iter<<" cluster cost is: "<<cluster_map_runtime
+                         <<" ,next is: "<<next_runtime<<" ,current is: "<<current_runtime
+                         <<" ,best is: "<<best_runtime<<" ,init cost: "<<initialCost<<
+                         " ,final cost: "<<finalCost<<std::endl;
+                //<<" ,verify final cost: "<<commOptimizer->getInitialObjective(hierarchy)<<std::endl;
+            }
+            if(cluster_map_runtime<next_runtime){
+                std::cout<<"found a cluster mapping that reduces the next runtime from: "<<
+                         next_runtime<<" to: "<<cluster_map_runtime<<" !"<<" ,iter: "<<iter<<std::endl;
+                next_runtime=cluster_map_runtime;
+                next=physical_mapping;
+            }
+        }
+    }*/
     if (iter % 1000 == 0) {
       printf("iteration(%zu) current_strategy(%.4lf) best_strategy(%.4lf)\n", iter,
              current_runtime, best_runtime);
@@ -1964,13 +2069,150 @@ void FFModel::optimize(Simulator* simulator,
     if (next_runtime < current_runtime) {
       current = next;
       current_runtime = next_runtime;
+      current_last_changed=iter;
     } else if (rn < std::exp(-alpha * diff)) {
       current = next;
       current_runtime = next_runtime;
     }
+    //saeed
+    if(config.commOptimization==CommOptimization::Random || config.commOptimization==CommOptimization::Hybrid) {
+        prob = std::rand();
+        prob = prob % 100;
+        if (prob < 12) {
+            prob = std::rand();
+            prob = prob % 3;
+            int trials = 1;
+            if (iter - current_last_changed > 1000) {
+                trials = 100;
+                current_last_changed = iter;
+                std::cout
+                        << "Beginning extensive random mapping search after long period of not improving the cutrrent strategy! prob: "
+                        << prob << std::endl;
+            }
+            if (prob < 2) {
+                physical_mapping = current;
+                for (int i = 0; i < trials; i++) {
+                    mapping = commOptimizer->mapRandom();
+                    applyVirToPhyMapping(current, physical_mapping, mapping);
+                    float rand_map_runtime = simulator->simulate_runtime(this, physical_mapping, comp_mode, nullptr,
+                                                                         false);
+                    if (rand_map_runtime < current_runtime) {
+                        std::cout << "current: found a random mapping that reduces the current runtime from: " <<
+                                  current_runtime << " to: " << rand_map_runtime << " !" << std::endl;
+                        current_runtime = rand_map_runtime;
+                        current = physical_mapping;
+                        current_last_changed = iter;
+                        if (current_runtime < best_runtime) {
+                            std::cout << "random: best updated from: " << best_runtime << " to: " << current_runtime
+                                      << " !"
+                                      << std::endl;
+                            best_runtime = current_runtime;
+                            best = current;
+                        }
+                    }
+                }
+            } else {
+                physical_mapping = next;
+                for (int i = 0; i < trials; i++) {
+                    mapping = commOptimizer->mapRandom();
+                    applyVirToPhyMapping(next, physical_mapping, mapping);
+                    float rand_map_runtime = simulator->simulate_runtime(this, physical_mapping, comp_mode, nullptr,
+                                                                         false);
+                    if (rand_map_runtime < current_runtime) {
+                        std::cout << "next: found a random mapping that reduces the current runtime from: " <<
+                                  current_runtime << " to: " << rand_map_runtime << " !" << std::endl;
+                        current_runtime = rand_map_runtime;
+                        current = physical_mapping;
+                        current_last_changed = iter;
+                        if (current_runtime < best_runtime) {
+                            std::cout << "random: best updated from: " << best_runtime << " to: " << current_runtime
+                                      << " !"
+                                      << std::endl;
+                            best_runtime = current_runtime;
+                            best = current;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if(config.commOptimization==CommOptimization::ClusterBased || config.commOptimization==CommOptimization::Hybrid) {
+        prob = std::rand();
+        prob = prob % 100;
+        if (prob < 10) {
+            /*next=current;
+            for(int i=0;i<5;i++){
+                rewrite(current, current, use_propagation);
+            }*/
+            if (last_current != current_runtime) { //last_current!=current_runtime
+                last_current = current_runtime;
+                float verify_current = simulator->simulate_runtime(this, current, comp_mode, commOptimizer, false);
+                initialCost = commOptimizer->getInitialObjective(hierarchy);
+                if (initialCost > 0) {
+                    mapping = commOptimizer->mapByClustering(hierarchy, finalCost);
+                    physical_mapping = current;
+                    applyVirToPhyMapping(current, physical_mapping, mapping);
+                    cluster_map_runtime = simulator->simulate_runtime(this, physical_mapping, comp_mode, nullptr,
+                                                                            false);
+                    std::cout << "clustering and sim end, iter: " << iter << " cluster cost is: " << cluster_map_runtime
+                              << " ,next is: " << next_runtime << " ,current is: " << current_runtime
+                              << " ,best is: " << best_runtime << " ,init current cost: " << initialCost <<
+                              " ,final cluster cost: " << finalCost << " ,verify current is: " << verify_current
+                              << " ,prob: " << prob << std::endl;
+                    //printMapping(mapping);
+                    if (cluster_map_runtime < current_runtime) {
+                        std::cout << "found a cluster mapping that reduces the current runtime from: " <<
+                                  current_runtime << " to: " << cluster_map_runtime << " !" << std::endl;
+                        current_runtime = cluster_map_runtime;
+                        current = physical_mapping;
+                        current_last_changed = iter;
+                        if (current_runtime < best_runtime) {
+                            std::cout << "clustering: best updated from: " << best_runtime << " to: " << current_runtime
+                                      << " !" << std::endl;
+                            best_runtime = current_runtime;
+                            best = current;
+                        }
+                    }
+                }
+            } else {
+                float verify_next = simulator->simulate_runtime(this, next, comp_mode, commOptimizer, false);
+                initialCost = commOptimizer->getInitialObjective(hierarchy);
+                if (initialCost > 0) {
+                    mapping = commOptimizer->mapByClustering(hierarchy, finalCost);
+                    physical_mapping = next;
+                    applyVirToPhyMapping(next, physical_mapping, mapping);
+                    cluster_map_runtime = simulator->simulate_runtime(this, physical_mapping, comp_mode, nullptr,
+                                                                            false);
+                    std::cout << "clustering and sim end, iter: " << iter << " cluster cost is: " << cluster_map_runtime
+                              << " ,next is: " << next_runtime << " ,current is: " << current_runtime
+                              << " ,best is: " << best_runtime << " ,init current cost: " << initialCost <<
+                              " ,final cluster cost: " << finalCost << " ,verify next is: " << verify_next
+                              << finalCost << std::endl;
+                    //printMapping(mapping);
+                    if (cluster_map_runtime < current_runtime) {
+                        std::cout << "found a cluster mapping that reduces the current runtime from: " <<
+                                  current_runtime << " to: " << cluster_map_runtime << " !" << std::endl;
+                        current_runtime = cluster_map_runtime;
+                        current = physical_mapping;
+                        current_last_changed = iter;
+                        if (current_runtime < best_runtime) {
+                            std::cout << "clustering: best updated from: " << best_runtime << " to: " << current_runtime
+                                      << " !" << std::endl;
+                            best_runtime = current_runtime;
+                            best = current;
+                        }
+                    }
+                }
+            }
+        }
+    }
+  }
+  if(config.commOptimization==CommOptimization::Random || config.commOptimization==CommOptimization::Hybrid) {
+        //saeed
+        randomVirToPhyMap(1000,simulator,best,comp_mode);
   }
   printf("=========== Best Discovered Strategy ==========\n");
-  simulator->simulate_runtime(this, best, comp_mode, this->config.export_strategy_task_graph_file);
+  simulator->simulate_runtime(this, best, comp_mode,nullptr,false,this->config.export_strategy_task_graph_file);
   std::map<Op*, ParallelConfig>::const_iterator it;
   for (it = best.begin(); it != best.end(); it++) {
     printf("[%s] num_dims(%d) dims[", it->first->name, it->second.nDims);
@@ -2265,12 +2507,24 @@ FFConfig::FFConfig()
   syntheticInput = false;
   perform_fusion = false;
 
+  //saeed
+  commOptimization=CommOptimization::None;
+  override_numNodes=-1;
+  override_workersPerNode=-1;
+
   // Parse input arguments
   {
     const InputArgs &command_args = HighLevelRuntime::get_input_args();
     char **argv = command_args.argv;
     int argc = command_args.argc;
     parse_args(argv, argc);
+  }
+  //saeed
+  if(override_numNodes==-1){
+      override_numNodes=numNodes;
+  }
+  if(override_workersPerNode==-1){
+      override_workersPerNode=workersPerNode;
   }
 
   Runtime *runtime = Runtime::get_runtime();
@@ -2344,6 +2598,30 @@ void FFConfig::parse_args(char **argv, int argc)
     {
       workersPerNode = atoi(argv[++i]);
       continue;
+    }
+    if (!strcmp(argv[i], "--comm-optimization"))
+    {
+        i++;
+        if(!strcmp(argv[i], "random")){
+            commOptimization=CommOptimization::Random;
+        }
+        else if(!strcmp(argv[i], "cluster")){
+            commOptimization=CommOptimization::ClusterBased;
+        }
+        else if(!strcmp(argv[i], "hybrid")){
+            commOptimization=CommOptimization::Hybrid;
+        }
+        continue;
+    }
+    if (!strcmp(argv[i], "--override-ll:gpu"))
+    {
+       override_workersPerNode = atoi(argv[++i]);
+       continue;
+    }
+    if (!strcmp(argv[i], "--override-nodes"))
+    {
+        override_numNodes = atoi(argv[++i]);
+        continue;
     }
     if (!strcmp(argv[i], "--nodes"))
     {

@@ -320,16 +320,23 @@ CostMetrics Simulator::measure_operator_cost(Op* op, const ParallelConfig& confi
 
 float Simulator::simulate_runtime(const FFModel* model,
                                   const std::map<Op*, ParallelConfig>& global,
-                                  CompMode comp_mode)
+                                  CompMode comp_mode,
+                                  VirToPhyMapper::CommOptimizer *commOptimizer,
+                                  bool printStats)
 {
-  return this->simulate_runtime(model, global, comp_mode, "");
+  return this->simulate_runtime(model, global, comp_mode,commOptimizer,printStats, "");
 }
 
 float Simulator::simulate_runtime(const FFModel* model,
                                   const std::map<Op*, ParallelConfig>& global,
                                   CompMode comp_mode,
+                                  VirToPhyMapper::CommOptimizer *commOptimizer,
+                                  bool printStats,
                                   std::string const &export_file_name)
 {
+  if(commOptimizer!=nullptr){
+      commOptimizer->resetCommGraph();
+  }
   // printf("%s\n", machine->to_string().c_str());
   task_manager->reset();
   // Step 1: register forward and backward tasks
@@ -374,12 +381,28 @@ float Simulator::simulate_runtime(const FFModel* model,
               SimTask* dstT = task_manager->get_forward_task(op, dstId);
               SimTask* srcT = task_manager->get_forward_task(pre_op, srcId);
               add_task_dependencies_with_xfer(srcT, dstT, dstR.intersection(srcR).get_volume() * element_size);
+              if(commOptimizer!= nullptr && dstT->device->device_id!=srcT->device->device_id){
+                  commOptimizer->addComm(srcT->device->device_id,dstT->device->device_id,
+                                         dstR.intersection(srcR).get_volume()*element_size);
+                  //commOptimizer->addComm(pre_config.device_ids[srcId],config.device_ids[dstId],
+                                         //dstR.intersection(srcR).get_volume()*element_size);
+                  //std::cout<<"comm edge from: "<<pre_config.device_ids[srcId]<<" to: "<<config.device_ids[dstId]
+                  //<<" ,val: "<<dstR.intersection(srcR).get_volume()<<std::endl;
+              }
             }
             // Backward dependency
             if (comp_mode == COMP_MODE_TRAINING) {
               SimTask* dstT = task_manager->get_backward_task(op, dstId);
               SimTask* srcT = task_manager->get_backward_task(pre_op, srcId);
               add_task_dependencies_with_xfer(dstT, srcT, dstR.intersection(srcR).get_volume() * element_size);
+              if(commOptimizer!= nullptr && dstT->device->device_id!=srcT->device->device_id){
+                  commOptimizer->addComm(dstT->device->device_id,srcT->device->device_id,
+                                         dstR.intersection(srcR).get_volume()*element_size);
+                  //commOptimizer->addComm(config.device_ids[dstId],pre_config.device_ids[srcId],
+                                         //dstR.intersection(srcR).get_volume()*element_size);
+                  //std::cout<<"comm edge from: "<<config.device_ids[dstId]<<" to: "<<pre_config.device_ids[srcId]
+                           //<<" ,val: "<<dstR.intersection(srcR).get_volume()<<std::endl;
+              }
             }
           }
         }
@@ -429,9 +452,17 @@ float Simulator::simulate_runtime(const FFModel* model,
                 // Add comm. tasks from backT to updateT
                 SimTask* backT = task_manager->get_backward_task(op, nextId);
                 add_task_dependencies_with_xfer(backT, updateT, firstR.get_volume() * element_size);
+                if(commOptimizer!= nullptr && backT->device->device_id!=updateT->device->device_id){
+                    commOptimizer->addComm(backT->device->device_id,updateT->device->device_id,
+                                           firstR.get_volume()*element_size);
+                }
                 // Add comm. tasks from updateT to finalT
                 SimTask* finalT = finals[backT->device->device_id];
                 add_task_dependencies_with_xfer(updateT, finalT, firstR.get_volume() * element_size);
+                if(commOptimizer!= nullptr && updateT->device->device_id!=finalT->device->device_id){
+                    commOptimizer->addComm(updateT->device->device_id,finalT->device->device_id,
+                                           firstR.get_volume()*element_size);
+                }
               }
             }
           }
@@ -485,9 +516,17 @@ float Simulator::simulate_runtime(const FFModel* model,
                 SimTask* barrierT = barriers[backT->device->device_id];
                 // Add comm. tasks from barrierT to updateT
                 add_task_dependencies_with_xfer(barrierT, updateT, firstR.get_volume() * element_size);
+                if(commOptimizer!= nullptr && barrierT->device->device_id!=updateT->device->device_id){
+                    commOptimizer->addComm(barrierT->device->device_id,updateT->device->device_id,
+                                           firstR.get_volume()*element_size);
+                }
                 // Add comm. tasks from updateT to finalT
                 SimTask* finalT = finals[backT->device->device_id];
                 add_task_dependencies_with_xfer(updateT, finalT, firstR.get_volume() * element_size);
+                if(commOptimizer!= nullptr && updateT->device->device_id!=finalT->device->device_id){
+                    commOptimizer->addComm(updateT->device->device_id,finalT->device->device_id,
+                                           firstR.get_volume()*element_size);
+                }
               }
             }
           }
@@ -558,6 +597,14 @@ float Simulator::simulate_runtime(const FFModel* model,
   }
   // Assert all tasks were processed
   assert(idx == task_manager->global_task_id);
+  if(printStats){
+      std::cout<<"Device end times. idx is: "<<idx<<" ,device time sizes is: "<<device_times.size()<<std::endl;
+      for(auto &a:device_times){
+          if(a.first->type==Device::DeviceType::DEVICE_COMP){
+              std::cout<<"End time of GPU: "<<a.first->name<<" is: "<<a.second<<std::endl;
+          }
+      }
+  }
 #ifdef FF_USE_NCCL
   if (comp_mode == COMP_MODE_TRAINING) {
     for (size_t l = 0; l < model->layers.size(); l++) {

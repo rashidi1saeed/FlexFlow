@@ -11,6 +11,10 @@ SimpleMachineModel::SimpleMachineModel(int num_nodes, int num_gpus_per_node, siz
   inter_node_bandwidth = 12 * 1024 * 1024.0f / num_nodes; /* B/ms*/
   gpu_dram_bandwidth = 16 * 1024 * 1024.0f; /* B/ms*/
 
+  bckp_inter_gpu_bandwidth=inter_gpu_bandwidth;
+  bckp_inter_node_bandwidth=inter_node_bandwidth;
+  bckp_gpu_dram_bandwidth=gpu_dram_bandwidth;
+
   // Create GPU compute device
   for (int i = 0; i < num_nodes; i++) {
     for (int j = 0; j < num_gpus_per_node; j++) {
@@ -55,7 +59,92 @@ SimpleMachineModel::SimpleMachineModel(int num_nodes, int num_gpus_per_node, siz
     }
   }
 }
+void SimpleMachineModel::switch_to_inf_comm_perf() {
+    std::cout<<"changing comm perf to infinity...."<<std::endl;
+    inter_gpu_bandwidth = 1000000000000.0f; /* B/ms*/
+    inter_node_bandwidth = 1000000000000.0f; /* B/ms*/
+    gpu_dram_bandwidth = 1000000000000.0f; /* B/ms*/
 
+    // Create inter GPU comm devices (NVLinks)
+    for (int i = 0; i < num_gpus; i++) {
+        for (int j = 0; j < num_gpus; j++) {
+            Device* src = id_to_gpu[i];
+            Device* dst = id_to_gpu[j];
+            if (src->node_id == dst->node_id && src != dst) {
+                int device_id = i * num_gpus + j;
+                std::string nvlink_name = "NVLINK " + std::to_string(device_id);
+                delete ids_to_inter_gpu_comm_device[device_id];
+                ids_to_inter_gpu_comm_device[device_id] = new CommDevice(nvlink_name, CommDevice::NVLINK_COMM, src->node_id, src->node_id, device_id, 0, inter_gpu_bandwidth);
+            }
+        }
+    }
+
+    // Create gpu<->dram comm devices
+    for (int i = 0; i < num_gpus; i++) {
+        int node_id = num_gpus / num_gpus_per_node;
+        std::string pci_to_host_name = "PCI_TO_HOST " + std::to_string(i);
+        delete id_to_gputodram_comm_device[i];
+        id_to_gputodram_comm_device[i] = new CommDevice(pci_to_host_name, CommDevice::PCI_TO_HOST_COMM, node_id, node_id, i, 0, gpu_dram_bandwidth);
+        std::string pci_to_dev_name = "PCI_TO_DEV " + std::to_string(i);
+        delete id_to_dramtogpu_comm_device[i];
+        id_to_dramtogpu_comm_device[i] = new CommDevice(pci_to_dev_name, CommDevice::PCI_TO_DEV_COMM, node_id, node_id, i, 0, gpu_dram_bandwidth);
+    }
+
+    // Create inter node comm devices
+    for (int i = 0; i < num_nodes; i++) {
+        for (int j = 0; j < num_nodes; j++) {
+            if (i != j) {
+                int device_id = i * num_nodes + j;
+                std::string nic_name = "NIC " + std::to_string(device_id);
+                delete ids_to_inter_node_comm_device[device_id];
+                ids_to_inter_node_comm_device[device_id] = new CommDevice(nic_name, CommDevice::NIC_OUT_COMM, -1, -1, device_id, 0, inter_node_bandwidth);
+            }
+        }
+    }
+}
+void SimpleMachineModel::switch_to_orig_comm_perf() {
+    std::cout<<"changing comm perf to original...."<<std::endl;
+    inter_gpu_bandwidth = bckp_inter_gpu_bandwidth; /* B/ms*/
+    inter_node_bandwidth = bckp_inter_node_bandwidth; /* B/ms*/
+    gpu_dram_bandwidth = bckp_gpu_dram_bandwidth; /* B/ms*/
+
+    // Create inter GPU comm devices (NVLinks)
+    for (int i = 0; i < num_gpus; i++) {
+        for (int j = 0; j < num_gpus; j++) {
+            Device* src = id_to_gpu[i];
+            Device* dst = id_to_gpu[j];
+            if (src->node_id == dst->node_id && src != dst) {
+                int device_id = i * num_gpus + j;
+                std::string nvlink_name = "NVLINK " + std::to_string(device_id);
+                delete ids_to_inter_gpu_comm_device[device_id];
+                ids_to_inter_gpu_comm_device[device_id] = new CommDevice(nvlink_name, CommDevice::NVLINK_COMM, src->node_id, src->node_id, device_id, 0, inter_gpu_bandwidth);
+            }
+        }
+    }
+
+    // Create gpu<->dram comm devices
+    for (int i = 0; i < num_gpus; i++) {
+        int node_id = num_gpus / num_gpus_per_node;
+        std::string pci_to_host_name = "PCI_TO_HOST " + std::to_string(i);
+        delete id_to_gputodram_comm_device[i];
+        id_to_gputodram_comm_device[i] = new CommDevice(pci_to_host_name, CommDevice::PCI_TO_HOST_COMM, node_id, node_id, i, 0, gpu_dram_bandwidth);
+        std::string pci_to_dev_name = "PCI_TO_DEV " + std::to_string(i);
+        delete id_to_dramtogpu_comm_device[i];
+        id_to_dramtogpu_comm_device[i] = new CommDevice(pci_to_dev_name, CommDevice::PCI_TO_DEV_COMM, node_id, node_id, i, 0, gpu_dram_bandwidth);
+    }
+
+    // Create inter node comm devices
+    for (int i = 0; i < num_nodes; i++) {
+        for (int j = 0; j < num_nodes; j++) {
+            if (i != j) {
+                int device_id = i * num_nodes + j;
+                std::string nic_name = "NIC " + std::to_string(device_id);
+                delete ids_to_inter_node_comm_device[device_id];
+                ids_to_inter_node_comm_device[device_id] = new CommDevice(nic_name, CommDevice::NIC_OUT_COMM, -1, -1, device_id, 0, inter_node_bandwidth);
+            }
+        }
+    }
+}
 SimpleMachineModel::~SimpleMachineModel()
 {}
 
@@ -66,6 +155,11 @@ int SimpleMachineModel::get_version() const
 
 CompDevice *SimpleMachineModel::get_gpu(int device_id) const
 {
+  //saeed st
+  if(id_to_gpu.find(device_id) == id_to_gpu.end()){
+      std::cout<<"wrong device id of: "<<device_id<<" is accessed!"<<std::endl;
+  }
+  //saeed end
   assert(id_to_gpu.find(device_id) != id_to_gpu.end());
   return id_to_gpu.at(device_id);
 }
