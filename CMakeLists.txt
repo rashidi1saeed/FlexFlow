@@ -45,6 +45,7 @@ option(FF_USE_NCCL "Run FlexFlow with NCCL" ON)
 # option for avx2
 option(FF_USE_AVX2 "Run FlexFlow with AVX2" OFF)
 
+# You should include the lib file and header file of metis linrary here
 set(FLEXFLOW_EXT_LIBRARIES "")
 set(FLEXFLOW_INCLUDE_DIRS "")
 
