@@ -92,6 +92,9 @@ Legion runtime flags:
 * `-ll:bgwork`: number of background worker threads to create per process (default: 1)
 
 Performance auto-tuning flags:
+* `--comm-optimization`: the communication optimizer by remapping logical trainers to physical NPUs. Current values are: None, random, cluster, and hybrid (default: None)
+* `--override-ll:gpu`: if the number of gpus per node to find parallelization strategy exceeds the current platform capacity, use this variable to set the target gpus per node to find the best strategy for (default: the same as `-ll:gpu` variable)
+* `--override-nodes`: if the number of nodes to find parallelization strategy exceeds the current platform capacity, use this variable to set the target nodes  find the best strategy for (default: the same as `--nodes` variable)
 * `--search-budget` or `--budget`: the number of iterations for the MCMC search (default: 0)
 * `--search-alpha` or `--alpha`: a hyper-parameter for the search procedure (default: 0.05)
 * `--export-strategy` or `--export`: path to export the best discovered strategy (default: None)
